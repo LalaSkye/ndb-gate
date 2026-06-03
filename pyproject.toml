@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ndb-gate"
+version = "0.1.0"
+description = "No-Direct-Bind execution gate for AI agents: fail-closed, evidenced authority, verifiable receipts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Ricky Jones" }]
+keywords = ["ai-safety", "runtime-assurance", "agentic-ai", "fail-closed", "governance", "receipts"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
