@@ -1,26 +1,28 @@
 """Authority and evidence primitives.
 
-These encode the user's claim discipline directly:
+These encode the witness's claim classes directly:
     PROVED / PLAUSIBLE / PATTERN_ONLY / NOT_ADMISSIBLE
 
-Only PROVED (direct, first-party) evidence can satisfy a strict authority check.
-Everything weaker is, by construction, insufficient to authorise a terminal action.
+Important boundary: the classes and source strings are caller-supplied metadata.
+This module does not authenticate an issuer or independently establish that a
+piece of evidence is true. External issuer verification is outside this witness.
 """
 
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
 
 class EvidenceClass(Enum):
-    """Evidence classes, strongest first. Mirrors the user's claim ledger."""
+    """Evidence classes, strongest first, within this witness."""
 
-    PROVED = "PROVED"                  # direct / first-party / verified
-    PLAUSIBLE = "PLAUSIBLE"            # reasonable, unconfirmed
-    PATTERN_ONLY = "PATTERN_ONLY"     # resemblance, not evidence
-    NOT_ADMISSIBLE = "NOT_ADMISSIBLE"  # unsupported or unsafe
+    PROVED = "PROVED"
+    PLAUSIBLE = "PLAUSIBLE"
+    PATTERN_ONLY = "PATTERN_ONLY"
+    NOT_ADMISSIBLE = "NOT_ADMISSIBLE"
 
     @property
     def is_admissible(self) -> bool:
@@ -29,17 +31,18 @@ class EvidenceClass(Enum):
 
 @dataclass(frozen=True)
 class Evidence:
-    """A single piece of evidence backing an authority claim."""
+    """A caller-supplied evidence descriptor backing an authority claim.
+
+    evidence_class and source are labels consumed by this model. Their
+    authenticity and truth are not established by this module.
+    """
 
     claim: str
     evidence_class: EvidenceClass
-    source: str  # who/what attests to this, with provenance
+    source: str
 
     def satisfies(self, required: EvidenceClass) -> bool:
-        """True iff this evidence is at least as strong as `required`.
-
-        Ordering: PROVED > PLAUSIBLE > PATTERN_ONLY > NOT_ADMISSIBLE.
-        """
+        """True iff this evidence label is at least as strong as required."""
         order = {
             EvidenceClass.PROVED: 3,
             EvidenceClass.PLAUSIBLE: 2,
@@ -51,12 +54,16 @@ class Evidence:
 
 @dataclass(frozen=True)
 class AuthorityToken:
-    """An explicit, scoped, time-bounded grant of authority.
+    """An explicit, scoped, time-bounded grant represented in this witness.
 
-    Key design choices that enforce the user's invariants:
-      * scope is explicit and bounded  -> no silent scope upgrade
-      * single_use is True by default  -> batch authority does not carry over
-      * expires_at bounds the grant     -> no open-ended authority
+    Key design choices:
+      * scope is explicit and bounded -> no silent scope upgrade
+      * token_id is stable across object copies -> single-use is value-bound
+      * single_use is True by default -> one token id can be consumed once
+      * expires_at bounds the represented grant
+
+    The object does not authenticate who issued it. token_id is a runtime
+    identity for replay control, not a cryptographic credential.
     """
 
     action: str
@@ -65,12 +72,18 @@ class AuthorityToken:
     issued_at: float = field(default_factory=time.time)
     ttl_seconds: float = 300.0
     single_use: bool = True
+    token_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def expires_at(self) -> float:
         return self.issued_at + self.ttl_seconds
 
     def is_live(self, now: float | None = None) -> bool:
+        """Check liveness against now.
+
+        now is injectable for tests/simulation. Supplying it does not establish
+        an external trusted-clock guarantee.
+        """
         now = time.time() if now is None else now
         return now <= self.expires_at
 
