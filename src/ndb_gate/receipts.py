@@ -1,11 +1,12 @@
-"""Verifiable receipt chain.
+"""Hash-linked receipt chain.
 
-Every gate decision emits a Receipt. Receipts are hash-linked into a chain
-(each receipt commits to the hash of the previous one), so the decision history
-is tamper-evident: changing any past receipt breaks every receipt after it.
+Every completed gate decision emits a Receipt. Receipts are linked by the hash
+of the previous receipt, so edits to a chain already held by a reviewer break
+link verification.
 
-`verify_chain` replays the chain and confirms integrity. This is the
-"receipts are the product" principle made concrete and runnable.
+Boundary: verify_chain checks internal consistency only. A completely rewritten,
+internally consistent chain can verify unless an external anchor preserves the
+original head or some other independently held reference.
 """
 
 from __future__ import annotations
@@ -25,19 +26,19 @@ def _hash(payload: dict) -> str:
 
 @dataclass(frozen=True)
 class Receipt:
-    """A tamper-evident record of one gate decision."""
+    """An integrity-linked record of one gate outcome."""
 
     index: int
     action: str
     scope: str
-    outcome: str          # ALLOW / HOLD / DENY
+    outcome: str
     reason: str
     evidence_class: str
     prev_hash: str
     timestamp: float = field(default_factory=time.time)
 
     def body(self) -> dict:
-        """The fields covered by the hash (everything except self_hash)."""
+        """The fields covered by the receipt hash."""
         return {
             "index": self.index,
             "action": self.action,
@@ -54,7 +55,7 @@ class Receipt:
 
 
 class ReceiptChain:
-    """An append-only, hash-linked sequence of receipts."""
+    """An in-memory append-only, hash-linked sequence of receipts."""
 
     def __init__(self) -> None:
         self._receipts: list[Receipt] = []
@@ -96,18 +97,18 @@ class ReceiptChain:
 
 
 def verify_chain(receipts: list[Receipt]) -> bool:
-    """Replay a chain and confirm integrity.
+    """Check the supplied chain's internal hash-link consistency.
 
-    Returns True iff:
+    This is not an external authenticity check. It returns True iff:
       * indices are contiguous from 0
       * each receipt's prev_hash equals the previous receipt's self_hash
       * the first receipt links to GENESIS_HASH
     """
     prev = GENESIS_HASH
-    for expected_index, r in enumerate(receipts):
-        if r.index != expected_index:
+    for expected_index, receipt in enumerate(receipts):
+        if receipt.index != expected_index:
             return False
-        if r.prev_hash != prev:
+        if receipt.prev_hash != prev:
             return False
-        prev = r.self_hash()
+        prev = receipt.self_hash()
     return True
