@@ -1,13 +1,9 @@
-"""ndb-gate — No-Direct-Bind execution gate for AI agents.
+"""ndb-gate — model-local No-Direct-Bind execution-gate witness.
 
-Core property (Theorem 1, No-Direct-Bind):
-    An unresolved latent intent cannot bind to a terminal action.
-    Binding occurs IF AND ONLY IF an evidenced authority check resolves to ALLOW.
-    Absence of a resolved ALLOW yields HOLD (fail-closed), never execution.
-
-This package is a minimal, runnable reference implementation. It is deliberately
-small: the point is that the property is enforced by construction and is testable,
-not that the library is large.
+Within this package, the supplied effect function is attempted only through
+`Gate.bind` after the declared model checks pass. This package does not
+authenticate an external issuer, provide trusted time, or establish complete
+mediation in a caller's application.
 """
 
 from .gate import Gate, Decision, Outcome
