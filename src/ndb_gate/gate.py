@@ -25,6 +25,7 @@ class Outcome(Enum):
     ALLOW = "ALLOW"
     HOLD = "HOLD"
     DENY = "DENY"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Decision:
     outcome: Outcome
     reason: str
     receipt: Receipt
-    effect: object | None = None  # populated ONLY on ALLOW
+    effect: object | None = None  # populated ONLY on successful ALLOW
 
 
 class Gate:
@@ -57,16 +58,16 @@ class Gate:
     ) -> Decision:
         """Attempt to bind `action` in `scope` to its terminal effect.
 
-        The effect_fn is invoked IF AND ONLY IF the decision resolves to ALLOW.
-        Every call emits a receipt regardless of outcome.
+        A successful effect emits ALLOW. If the effect raises, the chain records
+        ERROR and the original exception is re-raised. Every attempted bind emits
+        a receipt.
         """
         now = time.time() if now is None else now
 
-        def _record(outcome: Outcome, reason: str, ev: str) -> Decision:
+        def _record(
+            outcome: Outcome, reason: str, ev: str, effect: object | None = None
+        ) -> Decision:
             receipt = self.chain.append(action, scope, outcome.value, reason, ev)
-            effect = None
-            if outcome is Outcome.ALLOW:
-                effect = effect_fn()  # the ONLY place an effect is ever produced
             return Decision(outcome=outcome, reason=reason, receipt=receipt, effect=effect)
 
         # --- Fail-closed checks, strongest reason first ---
@@ -101,7 +102,27 @@ class Gate:
                 token.evidence.evidence_class.value,
             )
 
-        # All checks passed -> the unique ALLOW path.
+        # All checks passed -> consume single-use authority before attempting the
+        # effect. A failed effect does not refund authority because it may have
+        # produced a partial external consequence before raising.
         if token.single_use:
             self._spent_tokens.add(id(token))
-        return _record(Outcome.ALLOW, "evidenced authority resolved", token.evidence.evidence_class.value)
+
+        try:
+            effect = effect_fn()  # the ONLY place an effect is ever attempted
+        except Exception as exc:
+            self.chain.append(
+                action,
+                scope,
+                Outcome.ERROR.value,
+                f"effect raised {type(exc).__name__}",
+                token.evidence.evidence_class.value,
+            )
+            raise
+
+        return _record(
+            Outcome.ALLOW,
+            "evidenced authority resolved; effect completed",
+            token.evidence.evidence_class.value,
+            effect,
+        )

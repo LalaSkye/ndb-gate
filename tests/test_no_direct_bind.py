@@ -110,7 +110,29 @@ def test_proved_authority_allows_and_executes_once():
     assert sink == ["EXECUTED"]
 
 
-# --- RECEIPTS: every decision is recorded and the chain verifies -----------
+def test_failed_effect_emits_error_receipt_not_allow():
+    g = Gate()
+    tok = proved_token()
+
+    def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        g.bind("deploy", "prod", tok, boom)
+
+    receipts = list(g.chain)
+    assert len(receipts) == 1
+    assert receipts[0].outcome == "ERROR"
+    assert receipts[0].reason == "effect raised RuntimeError"
+
+    # A failed effect does not refund a single-use token: the effect may have
+    # produced a partial external consequence before raising.
+    d = g.bind("deploy", "prod", tok, lambda: "SHOULD_NOT_RUN")
+    assert d.outcome is Outcome.DENY
+    assert len(g.chain) == 2
+
+
+# --- RECEIPTS: every attempt is recorded and the chain verifies ------------
 
 def test_every_decision_emits_a_receipt():
     g = Gate()
