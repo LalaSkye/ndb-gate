@@ -1,26 +1,26 @@
-"""Authority and evidence primitives.
+"""Authority and evidence primitives for the reference model.
 
-These encode the user's claim discipline directly:
-    PROVED / PLAUSIBLE / PATTERN_ONLY / NOT_ADMISSIBLE
-
-Only PROVED (direct, first-party) evidence can satisfy a strict authority check.
-Everything weaker is, by construction, insufficient to authorise a terminal action.
+The evidence classes are caller-supplied classifications. This module compares
+those classifications and token fields; it does not authenticate an external
+issuer, provenance source, or clock.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 
 
 class EvidenceClass(Enum):
-    """Evidence classes, strongest first. Mirrors the user's claim ledger."""
+    """Evidence-class labels, strongest first within this model."""
 
-    PROVED = "PROVED"                  # direct / first-party / verified
-    PLAUSIBLE = "PLAUSIBLE"            # reasonable, unconfirmed
-    PATTERN_ONLY = "PATTERN_ONLY"     # resemblance, not evidence
-    NOT_ADMISSIBLE = "NOT_ADMISSIBLE"  # unsupported or unsafe
+    PROVED = "PROVED"
+    PLAUSIBLE = "PLAUSIBLE"
+    PATTERN_ONLY = "PATTERN_ONLY"
+    NOT_ADMISSIBLE = "NOT_ADMISSIBLE"
 
     @property
     def is_admissible(self) -> bool:
@@ -29,17 +29,14 @@ class EvidenceClass(Enum):
 
 @dataclass(frozen=True)
 class Evidence:
-    """A single piece of evidence backing an authority claim."""
+    """A caller-supplied evidence record used by the reference gate."""
 
     claim: str
     evidence_class: EvidenceClass
-    source: str  # who/what attests to this, with provenance
+    source: str
 
     def satisfies(self, required: EvidenceClass) -> bool:
-        """True iff this evidence is at least as strong as `required`.
-
-        Ordering: PROVED > PLAUSIBLE > PATTERN_ONLY > NOT_ADMISSIBLE.
-        """
+        """Compare this record's class label with the configured threshold."""
         order = {
             EvidenceClass.PROVED: 3,
             EvidenceClass.PLAUSIBLE: 2,
@@ -51,12 +48,12 @@ class Evidence:
 
 @dataclass(frozen=True)
 class AuthorityToken:
-    """An explicit, scoped, time-bounded grant of authority.
+    """A scoped, time-bounded token value used by this reference model.
 
-    Key design choices that enforce the user's invariants:
-      * scope is explicit and bounded  -> no silent scope upgrade
-      * single_use is True by default  -> batch authority does not carry over
-      * expires_at bounds the grant     -> no open-ended authority
+    `identity_key` is a deterministic replay key over the immutable token
+    fields. It prevents a value-equal copy from becoming a fresh single-use
+    token. It is not a signature and does not authenticate who created the
+    token.
     """
 
     action: str
@@ -67,6 +64,28 @@ class AuthorityToken:
     single_use: bool = True
 
     @property
+    def identity_key(self) -> str:
+        payload = {
+            "action": self.action,
+            "scope": self.scope,
+            "evidence": {
+                "claim": self.evidence.claim,
+                "evidence_class": self.evidence.evidence_class.value,
+                "source": self.evidence.source,
+            },
+            "issued_at": self.issued_at.hex(),
+            "ttl_seconds": self.ttl_seconds.hex(),
+            "single_use": self.single_use,
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @property
     def expires_at(self) -> float:
         return self.issued_at + self.ttl_seconds
 
@@ -75,5 +94,5 @@ class AuthorityToken:
         return now <= self.expires_at
 
     def covers(self, action: str, scope: str) -> bool:
-        """Authority must match the exact action and scope. No widening."""
+        """Authority must match the requested action and scope."""
         return self.action == action and self.scope == scope
