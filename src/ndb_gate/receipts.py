@@ -1,11 +1,11 @@
 """Verifiable receipt chain.
 
-Every gate decision emits a Receipt. Receipts are hash-linked into a chain
-(each receipt commits to the hash of the previous one), so the decision history
-is tamper-evident: changing any past receipt breaks every receipt after it.
+Every gate attempt emits a Receipt. Receipts are hash-linked into a chain
+(each receipt commits to the hash of the previous one), so edits to a chain
+already in hand are detectable.
 
-`verify_chain` replays the chain and confirms integrity. This is the
-"receipts are the product" principle made concrete and runnable.
+`verify_chain` checks internal linkage and ordering. It does not authenticate
+the origin of a newly supplied chain and it does not provide an external anchor.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ def _hash(payload: dict) -> str:
 
 @dataclass(frozen=True)
 class Receipt:
-    """A tamper-evident record of one gate decision."""
+    """A hash-linked record of one gate attempt."""
 
     index: int
     action: str
     scope: str
-    outcome: str          # ALLOW / HOLD / DENY
+    outcome: str          # ALLOW / HOLD / DENY / ERROR
     reason: str
     evidence_class: str
     prev_hash: str
@@ -96,12 +96,15 @@ class ReceiptChain:
 
 
 def verify_chain(receipts: list[Receipt]) -> bool:
-    """Replay a chain and confirm integrity.
+    """Replay a chain and confirm internal integrity.
 
     Returns True iff:
       * indices are contiguous from 0
       * each receipt's prev_hash equals the previous receipt's self_hash
       * the first receipt links to GENESIS_HASH
+
+    This is an integrity check for supplied receipts, not external
+    authentication of who produced the chain.
     """
     prev = GENESIS_HASH
     for expected_index, r in enumerate(receipts):

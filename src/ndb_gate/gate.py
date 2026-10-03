@@ -1,13 +1,8 @@
-"""The No-Direct-Bind gate.
+"""Model-local No-Direct-Bind execution-gate witness.
 
-THEOREM 1 (No-Direct-Bind):
-    An unresolved latent intent cannot bind to a terminal action.
-    bind(intent) -> effect  IFF  resolve(authority, evidence) == ALLOW.
-    Otherwise the outcome is HOLD (fail-closed) or DENY. Never silent execution.
-
-The gate is the ONLY path to a terminal effect. There is no second code path
-that executes an action without passing through `Gate.bind`. That single-entry
-design is what makes the property hold by construction rather than by convention.
+Within this witness, a terminal effect is attempted only through `Gate.bind`
+after the declared authority/evidence checks pass. This is a property of this
+implementation, not a claim that callers cannot have other effect paths.
 """
 
 from __future__ import annotations
@@ -15,6 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
+from threading import Lock
 from typing import Callable
 
 from .authority import AuthorityToken, EvidenceClass
@@ -25,6 +21,7 @@ class Outcome(Enum):
     ALLOW = "ALLOW"
     HOLD = "HOLD"
     DENY = "DENY"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True)
@@ -32,20 +29,21 @@ class Decision:
     outcome: Outcome
     reason: str
     receipt: Receipt
-    effect: object | None = None  # populated ONLY on ALLOW
+    effect: object | None = None  # populated ONLY on successful ALLOW
 
 
 class Gate:
-    """Fail-closed execution gate.
+    """Fail-closed reference gate over declared model inputs.
 
-    `required` is the minimum evidence class needed to authorise. Default PROVED:
-    nothing weaker than first-party, verified evidence can bind a terminal action.
+    `required` is the minimum caller-supplied evidence class accepted by this
+    model. The class label is not external issuer authentication.
     """
 
     def __init__(self, required: EvidenceClass = EvidenceClass.PROVED) -> None:
         self.required = required
         self.chain = ReceiptChain()
-        self._spent_tokens: set[int] = set()
+        self._spent_tokens: set[str] = set()
+        self._spent_lock = Lock()
 
     def bind(
         self,
@@ -57,16 +55,19 @@ class Gate:
     ) -> Decision:
         """Attempt to bind `action` in `scope` to its terminal effect.
 
-        The effect_fn is invoked IF AND ONLY IF the decision resolves to ALLOW.
-        Every call emits a receipt regardless of outcome.
+        `now` is an injected model input when supplied; otherwise the process
+        clock is used. It is not a trusted-clock primitive.
+
+        A successful effect emits ALLOW. If the effect raises, the chain records
+        ERROR and the original exception is re-raised. Every attempted bind emits
+        a receipt.
         """
         now = time.time() if now is None else now
 
-        def _record(outcome: Outcome, reason: str, ev: str) -> Decision:
+        def _record(
+            outcome: Outcome, reason: str, ev: str, effect: object | None = None
+        ) -> Decision:
             receipt = self.chain.append(action, scope, outcome.value, reason, ev)
-            effect = None
-            if outcome is Outcome.ALLOW:
-                effect = effect_fn()  # the ONLY place an effect is ever produced
             return Decision(outcome=outcome, reason=reason, receipt=receipt, effect=effect)
 
         # --- Fail-closed checks, strongest reason first ---
@@ -87,13 +88,6 @@ class Gate:
         if not token.is_live(now):
             return _record(Outcome.HOLD, "authority expired", token.evidence.evidence_class.value)
 
-        if token.single_use and id(token) in self._spent_tokens:
-            return _record(
-                Outcome.DENY,
-                "single-use authority already spent; batch authority does not carry",
-                token.evidence.evidence_class.value,
-            )
-
         if not token.evidence.satisfies(self.required):
             return _record(
                 Outcome.HOLD,
@@ -101,7 +95,34 @@ class Gate:
                 token.evidence.evidence_class.value,
             )
 
-        # All checks passed -> the unique ALLOW path.
+        # Atomically consume stable token identity before attempting the effect.
+        # A failed effect does not refund authority because it may have produced
+        # a partial external consequence before raising.
         if token.single_use:
-            self._spent_tokens.add(id(token))
-        return _record(Outcome.ALLOW, "evidenced authority resolved", token.evidence.evidence_class.value)
+            with self._spent_lock:
+                if token.token_id in self._spent_tokens:
+                    return _record(
+                        Outcome.DENY,
+                        "single-use authority already spent; batch authority does not carry",
+                        token.evidence.evidence_class.value,
+                    )
+                self._spent_tokens.add(token.token_id)
+
+        try:
+            effect = effect_fn()  # the ONLY place this witness attempts an effect
+        except Exception as exc:
+            self.chain.append(
+                action,
+                scope,
+                Outcome.ERROR.value,
+                f"effect raised {type(exc).__name__}",
+                token.evidence.evidence_class.value,
+            )
+            raise
+
+        return _record(
+            Outcome.ALLOW,
+            "evidenced authority resolved; effect completed",
+            token.evidence.evidence_class.value,
+            effect,
+        )

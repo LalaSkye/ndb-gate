@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ndb-gate"
 version = "0.1.0"
-description = "No-Direct-Bind execution gate for AI agents: fail-closed, evidenced authority, verifiable receipts."
+description = "Model-local No-Direct-Bind execution-gate witness with fail-closed checks and hash-linked receipts."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
