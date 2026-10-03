@@ -93,6 +93,24 @@ def test_batch_authority_does_not_carry():
     assert sink == ["EXECUTED"]
 
 
+def test_value_equal_copy_does_not_refresh_single_use():
+    sink = []
+    g = Gate()
+    tok = proved_token(single_use=True)
+    copied = dataclasses.replace(tok)
+
+    assert copied is not tok
+    assert copied == tok
+    assert copied.identity_key == tok.identity_key
+
+    d1 = g.bind("deploy", "prod", tok, make_effect(sink))
+    d2 = g.bind("deploy", "prod", copied, make_effect(sink))
+
+    assert d1.outcome is Outcome.ALLOW
+    assert d2.outcome is Outcome.DENY
+    assert sink == ["EXECUTED"]
+
+
 def test_proved_authority_allows_and_executes_once():
     sink = []
     g = Gate()
@@ -133,6 +151,20 @@ def test_effect_exception_emits_error_receipt_not_allow():
     assert receipts[0].outcome == "ERROR"
     assert receipts[0].reason == "effect raised RuntimeError"
     assert verify_chain(receipts) is True
+
+
+def test_failed_effect_still_consumes_single_use_token():
+    g = Gate()
+    tok = proved_token()
+
+    def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        g.bind("deploy", "prod", tok, boom)
+
+    d = g.bind("deploy", "prod", dataclasses.replace(tok), lambda: "second")
+    assert d.outcome is Outcome.DENY
 
 
 def test_every_completed_decision_emits_a_receipt():

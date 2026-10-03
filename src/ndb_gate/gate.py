@@ -37,14 +37,14 @@ class Decision:
 class Gate:
     """Fail-closed reference gate over caller-supplied token/evidence objects.
 
-    `required` is the minimum evidence class label accepted by this model.
+    `required` is the minimum evidence-class label accepted by this model.
     The library does not authenticate who assigned that label.
     """
 
     def __init__(self, required: EvidenceClass = EvidenceClass.PROVED) -> None:
         self.required = required
         self.chain = ReceiptChain()
-        self._spent_tokens: set[int] = set()
+        self._spent_tokens: set[str] = set()
 
     def bind(
         self,
@@ -58,16 +58,15 @@ class Gate:
 
         A successful ALLOW receipt is appended only after `effect_fn` returns.
         If an authorised effect raises, an ERROR receipt is appended and the
-        original exception is re-raised. Every ordinary call path therefore
-        records what completed rather than pre-recording success.
+        original exception is re-raised. The optional `now` argument is a
+        caller-supplied clock override for deterministic testing; this module
+        does not establish a trusted external clock.
         """
         now = time.time() if now is None else now
 
         def _record(outcome: Outcome, reason: str, ev: str) -> Decision:
             receipt = self.chain.append(action, scope, outcome.value, reason, ev)
             return Decision(outcome=outcome, reason=reason, receipt=receipt, effect=None)
-
-        # --- Fail-closed checks, strongest reason first ---
 
         if token is None:
             return _record(Outcome.HOLD, "no authority token presented", "NOT_ADMISSIBLE")
@@ -93,7 +92,8 @@ class Gate:
                 token.evidence.evidence_class.value,
             )
 
-        if token.single_use and id(token) in self._spent_tokens:
+        token_key = token.identity_key
+        if token.single_use and token_key in self._spent_tokens:
             return _record(
                 Outcome.DENY,
                 "single-use authority already spent; batch authority does not carry",
@@ -107,10 +107,10 @@ class Gate:
                 token.evidence.evidence_class.value,
             )
 
-        # The token is consumed before attempting the effect, preserving the
-        # existing single-use behaviour even when the effect itself raises.
+        # Consume the token value before attempting the effect, preserving
+        # single-use behaviour even when the effect raises.
         if token.single_use:
-            self._spent_tokens.add(id(token))
+            self._spent_tokens.add(token_key)
 
         evidence_class = token.evidence.evidence_class.value
         reason = "evidenced authority resolved"
